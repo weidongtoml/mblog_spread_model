@@ -50,6 +50,7 @@ func NewUserNetwork(size int) UserNetwork {
 	return make(map[uint64]*User, size)
 }
 
+// TODO(weidoliang): This is incorrect, fix it
 func (user_network *UserNetwork) FinalizeNetwork() {
 	for _, user := range *user_network {
 		user.FinalizeRetweetRate()
@@ -89,10 +90,75 @@ func (user_qq_list *UserQQList) String() string {
 	return fmt.Sprintf("UserQQList[%d]{%v}", user_qq_list.size, user_qq_list.list)
 }
 
+// Structure for storing retweet information
+type RetweetInfo struct {
+	retweet_count	uint64
+	retweet_rate	float64
+}
+
+type UserRetweetRate map[uint64]*RetweetInfo
+
+type UserInteractions map[uint64]*UserRetweetRate
+
+func NewUserRetweetRate () *UserRetweetRate {
+	user_retweet_rate := UserRetweetRate(make(map[uint64]*RetweetInfo))
+	return &user_retweet_rate
+}
+
+func NewUserInteractions (size int) *UserInteractions {
+	interactions := UserInteractions(make(map[uint64]*UserRetweetRate, size))
+	return &interactions
+}
+
+func (interactions *UserInteractions) String() string {
+	str := ""
+	for qq, value := range *interactions {
+		str += fmt.Sprintf("%d: %v\n", qq, value)
+	}
+	return str
+}
+
+func (retweet_rate *UserRetweetRate) String() string {
+	str := ""
+	for qq, value := range *retweet_rate {
+		str += fmt.Sprintf("%d: %v\t", qq, *value)
+	}
+	return str
+}
+
+
+func (interactions *UserInteractions) AddInterctions(qq_origin, qq_retweet, 
+	count uint64) {
+	retweet_rate, found := (*interactions)[qq_retweet]
+	if !found {
+		(*interactions)[qq_retweet] = NewUserRetweetRate()
+		retweet_rate = (*interactions)[qq_retweet]
+	}
+	_, found = (*retweet_rate)[qq_origin]
+	if found {
+		//TODO(weidoliang): add error handling and error log
+	} else {
+		(*retweet_rate)[qq_origin] = & RetweetInfo{retweet_count: count}
+	}
+}
+
+func (interactions *UserInteractions) Finalize() {
+	for _, user_retweet_rate := range *interactions {
+		total_retweets := uint64(0)
+		for _, retweet_info := range *user_retweet_rate {
+			total_retweets += retweet_info.retweet_count
+		}
+		for _, r_info := range *user_retweet_rate {
+			r_info.retweet_rate = float64(r_info.retweet_count) / float64(total_retweets)
+		}
+	}
+}
+
 // Load an mblog network from the given files.
-func LoadUserNetworkFromFile(active_rate_file, interaction_rate_file string) (*UserNetwork, *UserQQList) {
+func LoadUserNetworkFromFile(active_rate_file, interaction_rate_file string) (*UserNetwork, *UserQQList, *UserInteractions) {
 	user_network := NewUserNetwork(1000)
 	user_qq_list := NewUserQQList(1000)
+	user_interactions := NewUserInteractions(1000)
 
 	u_active_rate_f, err := os.Open(active_rate_file)
 	if err != nil {
@@ -165,31 +231,48 @@ func LoadUserNetworkFromFile(active_rate_file, interaction_rate_file string) (*U
 		user, found := user_network[qq_original]
 		if found {
 			user.AppendNeighbour(qq_repost, retweet_count)
+			user_interactions.AddInterctions(qq_original, qq_repost, retweet_count)
 		} else {
 			// Not an active user, ignore this interaction
 		}
 	}
 	user_network.FinalizeNetwork()
+	user_interactions.Finalize()
 
-	return &user_network, user_qq_list
+	return &user_network, user_qq_list, user_interactions
 }
 
 type SimulationParam struct {
-
+	max_depth		int
+	retweet_factor	float32
 }
 
 // Runs the spread simulation 
-func RunSpreadSimulation(param *SimulationParam, user_network *UserNetwork, user_list *UserQQList) {
-
+func RunSpreadSimulation(param *SimulationParam, user_network *UserNetwork, 
+	user_list *UserQQList, user_interactions *UserInteractions) float64 {
+	rounds = 100
+	total_retweets := 0
+	for i := 0; i < rounds; i++ {
+		init_qq := user_list.RandomQQ()
+		runSpread(param, user_network, user_list, user_interactions, init_qq, 0);
+	}
+	return float64(total_retweets)/float64(rounds)
 }
 
-func runSingleSimulation(param *SimulationParam, user_network *UserNetwork, user_list *UserQQList) uint64 {
-	init_qq := user_list.RandomQQ()
-	_, user := &user_network[init_qq]
+func runSpread(param *SimulationParam, user_network *UserNetwork, 
+	user_list *UserQQList, init_qq uint64, depth int) uint64 {
 	total_retweets := 0
-	for iter := float64(0); iter < user.active_rate; iter += 1 {
-		
-	} 
+	if depth < param.max_depth {
+		user, found := (*user_network)[init_qq]
+		if found {
+			do_retweet := true
+			if depth > 0 {
+				
+			}
+		} else {
+			//User is inactive, we just skip it
+		}
+	}
 	return total_retweets
 }
 
@@ -204,9 +287,11 @@ func main() {
 
 	flag.Parse()
 
-	user_network, user_list := LoadUserNetworkFromFile(*user_active_rate_file, *user_interaction_rate_file)
+	user_network, user_list, user_interactions := LoadUserNetworkFromFile(*user_active_rate_file, *user_interaction_rate_file)
 
 	fmt.Printf("User Network:\n%v\n", user_network)
 	fmt.Println("-------------------------------------")
 	fmt.Printf("User List:\n%v\n", user_list)
+	fmt.Println("-------------------------------------")
+	fmt.Printf("%v", user_interactions)
 }
