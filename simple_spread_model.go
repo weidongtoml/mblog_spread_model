@@ -154,6 +154,7 @@ func (interactions *UserInteractions) Finalize() {
 	}
 }
 
+
 // Load an mblog network from the given files.
 func LoadUserNetworkFromFile(active_rate_file, interaction_rate_file string) (*UserNetwork, *UserQQList, *UserInteractions) {
 	user_network := NewUserNetwork(1000)
@@ -246,7 +247,7 @@ type SimulationParam struct {
 	max_depth		int
 	retweet_factor	float32
 }
-
+/*
 // Runs the spread simulation 
 func RunSpreadSimulation(param *SimulationParam, user_network *UserNetwork, 
 	user_list *UserQQList, user_interactions *UserInteractions) float64 {
@@ -275,7 +276,7 @@ func runSpread(param *SimulationParam, user_network *UserNetwork,
 	}
 	return total_retweets
 }
-
+*/
 func main() {
 	var user_active_rate_file = flag.String("active_rate_file",
 		"active_rate.txt",
