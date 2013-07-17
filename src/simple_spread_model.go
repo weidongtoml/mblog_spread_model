@@ -1,14 +1,8 @@
 package main
 
 import (
-	"bufio"
-	"flag"
 	"fmt"
-	"io"
-	"math/rand"
-	"os"
-	"strconv"
-	"strings"
+	"flag"
 	"spread_model"
 )
 
@@ -23,10 +17,14 @@ func main() {
 
 	flag.Parse()
 
-
-	fmt.Printf("User Network:\n%v\n", user_network)
-	fmt.Println("-------------------------------------")
-	fmt.Printf("User List:\n%v\n", user_list)
-	fmt.Println("-------------------------------------")
-	fmt.Printf("%v", user_interactions)
+	simulator := new(spread_model.Simulator)
+	simulator.LoadSpreadModelData(*user_active_rate_file, *user_interaction_rate_file)
+	parameters := simulator.GetParameters()
+	parameters.Avg_retweet_rate = 0.05
+	parameters.Max_depth = 3
+	parameters.Is_random_sim = true
+	parameters.Random_sim_rounds = 100
+	
+	result := simulator.RunSimulation()
+	fmt.Printf("Average Retweet Count: %f\n", result.GetAverageRetweetCount())
 }
