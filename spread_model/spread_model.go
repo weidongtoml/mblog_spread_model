@@ -1,4 +1,4 @@
-package main
+package spread_model
 
 import (
 	"bufio"
@@ -57,7 +57,13 @@ func (user_info_map *userInfoMap) hasUser(id uint64) bool {
 }
 
 func (user_info_map *userInfoMap) addUser(id uint64, avg_retweets uint64) {
-	user_info, _ := (*user_info_map)[id]
+	user_info, found := (*user_info_map)[id]
+	if found {
+		log.Printf("Error: duplicated user [%d], overriding pervioud info", id)
+	} else {
+		(*user_info_map)[id] = new(userInfo)
+		user_info = (*user_info_map)[id]
+	}
 	user_info.avg_daily_retweets = avg_retweets
 }
 
@@ -69,11 +75,11 @@ func (user_info_map *userInfoMap) addFollower(id, follower_id uint64) {
 }
 
 func (user_info_map *userInfoMap) followers(id uint64) *[]uint64 {
-	return &user_info_map[id].followers
+	return &(*user_info_map)[id].followers
 }
 
 func (user_info_map *userInfoMap) engagement_factor(id uint64) float32 {
-	return user_info_map[id].engagement_factor
+	return (*user_info_map)[id].engagement_factor
 }
 
 func (user_info_map *userInfoMap) finalize() {
@@ -92,10 +98,12 @@ func (user_info_map *userInfoMap) finalize() {
 // Storing the retweet action of a user, mainly the original poster of the 
 // tweets that has been retweeted by the user, and the number of posts of the poster
 // retweeted by the current user.
-type userRetweetAction map[uint64]struct {
+type userAction struct {
 	retweet_count       uint64
 	retweet_probability float32
 }
+
+type userRetweetAction map[uint64]*userAction
 
 // Retweet information of all the users
 type userInteractionMap map[uint64]*userRetweetAction
@@ -118,25 +126,34 @@ func (interactions *userInteractionMap) String() string {
 
 func (interactions *userInteractionMap) addInteractions(origin_id, retweet_id,
 	count uint64) {
-	user_retweet_action, found := (*interactions)[retweet_id]
+	_, found := (*interactions)[retweet_id]
 	if !found {
-		(*interactions)[retweet_id] = new(userRetweetAction)
-		user_retweet_action = (*interactions)[retweet_id]
+		new_retweet_action := userRetweetAction(make(map[uint64]*userAction, 10))
+		(*interactions)[retweet_id] = &new_retweet_action
 	}
-	retweet_info, found := (*user_retweet_action)[origin_id]
+	user_retweet_action, _ := (*interactions)[retweet_id]
+
+	user_action, found := (*user_retweet_action)[origin_id]
 	if found {
-		//TODO(weidoliang): add error handling and error log
+		log.Printf("Error, userInteractionMap.addInteractions encountered duplicated action pair[%d][%d], old information will be over-written",
+			origin_id, retweet_id)
+		(*user_action).retweet_count = count
 	} else {
-		retweet_info.retweet_count = count
+		(*user_retweet_action)[origin_id] = &userAction{count, float32(0)}
 	}
 }
 
-func (interactions *userInteractionMap) getRetweetProb(origin_id, retweet_id) float32 {
+func (interactions *userInteractionMap) getRetweetProb(origin_id, retweet_id uint64) float32 {
 	user_retweet_action, found := (*interactions)[retweet_id]
 	if !found {
+		log.Printf("Cannot find [%d]", retweet_id)
 		return float32(0)
 	}
 	retweet_info, found := (*user_retweet_action)[origin_id]
+	if !found {
+		log.Printf("Cannot find [%d][%d]", origin_id, retweet_id)
+		return float32(0)
+	}
 	return retweet_info.retweet_probability
 }
 
@@ -169,13 +186,31 @@ type SimulationParameters struct {
 
 // Structure for holding result of the current simulation
 type SimulationResult struct {
-	num_retweets	int
-	users			[]uint64
+	num_retweets []int
+}
+
+func (simulation_result *SimulationResult) addRetweetCount(count int) {
+	simulation_result.num_retweets = append(simulation_result.num_retweets, count)
+}
+
+func (simulation_result *SimulationResult) GetAverageRetweetCount() float32 {
+	sum := 0
+	for _, v := range simulation_result.num_retweets {
+		sum += v
+	}
+	return float32(sum)/float32(len(simulation_result.num_retweets))
 }
 
 type Simulator struct {
 	model_data *SpreadModelData
 	parameter  *SimulationParameters
+}
+
+func (simulator *Simulator) GetParameters () *SimulationParameters {
+	if simulator.parameter == nil {
+		simulator.parameter = new(SimulationParameters)
+	}
+	return simulator.parameter
 }
 
 // Load simulation data from the given files.
@@ -258,57 +293,61 @@ func (simulator *Simulator) LoadSpreadModelData(active_rate_file, interaction_ra
 	user_info_map.finalize()
 
 	simulator.model_data = &SpreadModelData{user_id_list, user_info_map, user_interaction_map}
-
 	return true
 }
 
+// Runs the Spread Model Simulation and returns the simulation result
 func (simulator *Simulator) RunSimulation() *SimulationResult {
 	param := simulator.parameter
 	id_list := simulator.model_data.user_id_list
+
+	simulation_result := new(SimulationResult)
 	if param.Is_random_sim {
 		round := 0
 		for round < param.Random_sim_rounds {
 			round++
 			id := id_list.randomId()
-			simulator.runSingleSpread(id)
+			num_retweets := simulator.runSingleSpread(id)
+			simulation_result.addRetweetCount(num_retweets)
 		}
 	} else {
 		for _, id := range id_list.list {
-			simulator.runSingleSpread(id)
+			num_retweets := simulator.runSingleSpread(id)
+			simulation_result.addRetweetCount(num_retweets)
 		}
 	}
-	return nil
+	return simulation_result
 }
 
 func (simulator *Simulator) runSingleSpread(id uint64) int {
 	user_info_map := simulator.model_data.user_info_map
 	retweet_prob := simulator.parameter.Avg_retweet_rate * user_info_map.engagement_factor(id)
 	rnd := rand.Float32()
-	retweet_count := 0
+	users_retweeted := make(map[uint64]bool)
 	if rnd < retweet_prob {
-		for _, follower_id := range user_info_map.followers(id) {
-			retweet_count += simulator.runReweet(id, follower_id, 0)
+		users_retweeted[id] = true
+		for _, follower_id := range *user_info_map.followers(id) {
+			simulator.runReweet(id, follower_id, 0, &users_retweeted)
 		}
 	}
-	return retweet_count
+	return len(users_retweeted)
 }
 
-// TODO(Add Restrictions that each user only retweet the same message once)
-func (simulator *Simulator) runReweet(post_id, follower_id uint64, depth int) int {
-	if depth > simulator.parameter.Max_depth {
-		return 0
+func (simulator *Simulator) runReweet(post_id, follower_id uint64, depth int, users_retweeted *map[uint64]bool) {
+	if depth > simulator.parameter.Max_depth || (*users_retweeted)[follower_id] {
+		return
 	}
 
 	user_info_map := simulator.model_data.user_info_map
 	interactions := simulator.model_data.user_interact_map
 	retweet_rate := simulator.parameter.Avg_retweet_rate * user_info_map.engagement_factor(follower_id) * interactions.getRetweetProb(post_id, follower_id)
-	retweet_count := 0
+
 	if rand.Float32() < retweet_rate {
-		for _, f_follow_id := range user_info_map.followers(follower_id) {
-			retweet_count += runReweet(follower_id, f_follow_id, depth+1)
+		(*users_retweeted)[follower_id] = true
+		for _, f_follow_id := range *user_info_map.followers(follower_id) {
+			simulator.runReweet(follower_id, f_follow_id, depth+1, users_retweeted)
 		}
 	}
-	return retweet_count
 }
 
 // TODO(weidoliang): Intialize Random Seed
