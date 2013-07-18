@@ -19,6 +19,9 @@ func TestUserIdList(t *testing.T) {
 			t.Errorf("userIdList.randomId() returns Ids that have not been added [%d],[%v]", rand_id, user_id_list)
 		}
 	}
+	if len(user_id_list.list) != len(ids) {
+		t.Errorf("Expected Id list to have %v but got %v", ids, user_id_list.list)
+	}
 }
 
 func TestUserInfo(t *testing.T) {
@@ -82,6 +85,50 @@ func TestUserInfo(t *testing.T) {
 			t.Errorf("Expected followers of [%d] to be %v, but got %v",
 				v.followers, *followers)
 		}
+	}
+
+	min_f, max_f, dist := user_info_map.getEngagementFactorDistribution(0.2)
+	expected_dist := []int{1, 0, 1, 0, 1, 0, 1}
+	//0.4, 0.8, 1.2, 1.6
+	//0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6
+	//[1,  	0, 	1,	0,	1,	0,	1]
+	if min_f != 0.4 {
+		t.Errorf("Expected min_factor to be %f, but got %f", 0.4, min_f)
+	}
+	if max_f != 1.6 {
+		t.Errorf("Expected max_factor to be %f, but got %f", 1.6, max_f)
+	}
+	dist_is_eqv := (len(expected_dist) == len(*dist))
+	if dist_is_eqv {
+		for i, _ := range expected_dist {
+			if expected_dist[i] != (*dist)[i] {
+				dist_is_eqv = false
+			}
+		}
+	}
+
+	if !dist_is_eqv {
+		t.Errorf("Expected distribution to be %v, but got %v", expected_dist, *dist)
+	}
+	
+	min_count, max_count, count_dist := user_info_map.getFollowersDistribution(1)
+	if min_count != 0 {
+		t.Errorf("Expected min count to be %d but got %d", 10, min_count) 
+	}
+	if max_count != 3 {
+		t.Errorf("Expected max count to be %d but got %d", 40, max_count) 
+	}
+	expected_count_dist := []int{1, 1, 1, 1}
+	count_dist_eqv := (len(*count_dist) == len(expected_count_dist))
+	if count_dist_eqv {
+		for i, _ := range expected_count_dist {
+			if expected_count_dist[i] != (*count_dist)[i] {
+				count_dist_eqv = false
+			}
+		}
+	}
+	if !count_dist_eqv {
+		t.Errorf("Expected count distribution to be %v but got %v", expected_count_dist, *count_dist)
 	}
 }
 
@@ -171,7 +218,7 @@ func TestLoadSpreadModelData(t *testing.T) {
 				v.reposter_id, v.original_id, v.retweet_count))
 		}
 	}()
-	
+
 	defer func() {
 		os.Remove(active_rate_file)
 		os.Remove(interaction_rate_file)
@@ -213,18 +260,52 @@ func TestLoadSpreadModelData(t *testing.T) {
 		parameters.Avg_retweet_rate = 0.5
 		parameters.Is_random_sim = false
 		parameters.Max_depth = 4
-		
+
 		result := simulator.RunSimulation()
-		
-		fmt.Printf("\nAverage Retweet Count for Sim1: %f\n",	result.GetAverageRetweetCount()) 
+
+		fmt.Printf("\nAverage Retweet Count for Sim1: %f\n", result.GetAverageRetweetCount())
 		fmt.Print("------------------------------------------------------\n\n")
 
 		parameters.Is_random_sim = true
 		parameters.Random_sim_rounds = 1000
 		result = simulator.RunSimulation()
-		fmt.Printf("\nAverage Retweet Count for Sim2: %f\n",	result.GetAverageRetweetCount()) 
+		fmt.Printf("\nAverage Retweet Count for Sim2: %f\n", result.GetAverageRetweetCount())
 		fmt.Print("------------------------------------------------------\n\n")
 	} else {
 		t.Errorf("Simulator.LoadSpreadModelData(%s,%s) failed", active_rate_file, interaction_rate_file)
+	}
+}
+
+func TestSimulationResult(t *testing.T) {
+	retweet_counts := []int{0, 0, 0, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10, 10, 100, 200, 500, 1000, 10000}
+	//retweet_freq := []int{3, 1, 2.,
+	var sim_result SimulationResult
+
+	sum := 0
+	for _, c := range retweet_counts {
+		sim_result.addRetweetCount(c)
+		sum += c
+	}
+
+	expected_avg_count := float32(sum) / float32(len(retweet_counts))
+	if math.Abs(float64(expected_avg_count-sim_result.GetAverageRetweetCount())) > 0.00001 {
+		t.Errorf("Expected average count to be %f but got %f\n", expected_avg_count, sim_result.GetAverageRetweetCount())
+	}
+
+	intervals := []int{1, 2, 3, 4, 5, 10, 15, 20, 100, 1000}
+	expected_distribution := []int{3, 1, 2, 3, 2, 6, 2, 0, 0, 3, 2}
+
+	distribution := sim_result.GetRetweetCountDistribution(&intervals)
+	distribution_is_eqv := true
+	if len(*distribution) != len(expected_distribution) {
+		distribution_is_eqv = false
+	}
+	for i, _ := range *distribution {
+		if (*distribution)[i] != expected_distribution[i] {
+			distribution_is_eqv = false
+		}
+	}
+	if !distribution_is_eqv {
+		fmt.Printf("Expected count distribution to be %v but got %v", expected_distribution, *distribution)
 	}
 }
