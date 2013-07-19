@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"math/rand"
 	"os"
 	"strconv"
@@ -83,7 +84,12 @@ func (user_info_map *userInfoMap) followers(id uint64) *[]uint64 {
 }
 
 func (user_info_map *userInfoMap) engagement_factor(id uint64) float32 {
-	return (*user_info_map)[id].engagement_factor
+	v, found := (*user_info_map)[id]
+	if found {  
+		return v.engagement_factor
+	} else {
+		return float32(0)
+	}
 }
 
 func (user_info_map *userInfoMap) finalize() {
@@ -99,11 +105,11 @@ func (user_info_map *userInfoMap) finalize() {
 	}
 }
 
-func (user_info_map *userInfoMap) getEngagementFactorDistribution(resolution float32) (float32, float32, *[]int){
+func (user_info_map *userInfoMap) getEngagementFactorDistribution(resolution float32) (float32, float32, *[]int) {
 	min_factor := float32(1.0)
 	max_factor := float32(0)
 	u_map := map[uint64]*userInfo(*user_info_map)
-	for _, v := range u_map	 {
+	for _, v := range u_map {
 		f := (*v).engagement_factor
 		if f > max_factor {
 			max_factor = f
@@ -112,15 +118,15 @@ func (user_info_map *userInfoMap) getEngagementFactorDistribution(resolution flo
 			min_factor = f
 		}
 	}
-	dist_size := int((max_factor - min_factor)/resolution+1)
+	dist_size := int((max_factor-min_factor)/resolution + 1)
 	dist := make([]int, dist_size)
-	
-	for _, v:= range u_map {
+
+	for _, v := range u_map {
 		f := (*v).engagement_factor
-		index := int((f - min_factor)/resolution)
+		index := int((f - min_factor) / resolution)
 		dist[index]++
 	}
-	
+
 	return min_factor, max_factor, &dist
 }
 
@@ -128,7 +134,7 @@ func (user_info_map *userInfoMap) getFollowersDistribution(resolution int) (int,
 	min_count := 10000
 	max_count := 0
 	u_map := map[uint64]*userInfo(*user_info_map)
-	for _, v := range u_map	 {
+	for _, v := range u_map {
 		s := len((*v).followers)
 		if s < min_count {
 			min_count = s
@@ -137,15 +143,15 @@ func (user_info_map *userInfoMap) getFollowersDistribution(resolution int) (int,
 			max_count = s
 		}
 	}
-	dist_size := int((max_count - min_count)/resolution+1)
-	dist := make([]int, dist_size) 
-	
-	for _, v:= range u_map {
+	dist_size := int((max_count-min_count)/resolution + 1)
+	dist := make([]int, dist_size)
+
+	for _, v := range u_map {
 		s := len((*v).followers)
-		index := int((s - min_count)/resolution)
+		index := int((s - min_count) / resolution)
 		dist[index]++
 	}
-	
+
 	return min_count, max_count, &dist
 }
 
@@ -160,11 +166,56 @@ type userAction struct {
 type userRetweetAction map[uint64]*userAction
 
 // Retweet information of all the users
+// [retweeter_id][original_poster_id] {retweet_count, retweet_probability}
 type userInteractionMap map[uint64]*userRetweetAction
 
 func newUserInteracionMap(size int) *userInteractionMap {
 	interactions := userInteractionMap(make(map[uint64]*userRetweetAction, size))
 	return &interactions
+}
+
+func (interactions *userInteractionMap) getCoActionRatioDistribution(resolution float32) (float32, float32, *[]int) {
+	co_action_ratios := make([]float32, 0)
+	min_co_ratio := float32(math.MaxFloat32)
+	max_co_ratio := float32(0)
+	max_co_found_so_far := float32(0)
+	for reposter_id, action := range *interactions {
+		for original_id, v := range *action {
+			ratio := float32(math.MaxFloat32)
+			action_2, found := (*interactions)[original_id]
+			if found { 
+				v2, found := (*action_2)[reposter_id]
+				if found && v2.retweet_count > 0 {
+					original_count := v2.retweet_count
+					reposter_count := v.retweet_count
+					ratio = float32(reposter_count) / float32(original_count)
+					
+					if ratio > max_co_found_so_far {
+						max_co_found_so_far = ratio
+					}		
+				}
+			}
+			co_action_ratios = append(co_action_ratios, ratio)
+			
+			if ratio < min_co_ratio {
+				min_co_ratio = ratio
+			}
+			if ratio > max_co_ratio {
+				max_co_ratio = ratio 
+			}
+		}
+	}
+	max_co_found_so_far += resolution
+	dist_size := int(float32(max_co_found_so_far - min_co_ratio)/resolution)+1
+	dist := make([]int, dist_size)
+	for _, v := range co_action_ratios {
+		index := int((v - min_co_ratio)/resolution)
+		if v == max_co_ratio {
+			index = int((max_co_found_so_far - min_co_ratio)/resolution)
+		}
+		dist[index]++
+	}
+	return min_co_ratio, max_co_ratio, &dist
 }
 
 func (interactions *userInteractionMap) String() string {
@@ -234,30 +285,33 @@ type SpreadModelData struct {
 	user_interact_map *userInteractionMap
 }
 
-func (spread_model_data *SpreadModelData) PrintDataStatistics () {
+func (spread_model_data *SpreadModelData) PrintDataStatistics() {
 	num_unique_users := spread_model_data.user_id_list.size
-	
+
 	user_info := spread_model_data.user_info_map
 	engage_factor_resolution := float32(0.1)
-	
+
 	min_factor, max_factor, factor_dist := user_info.getEngagementFactorDistribution(engage_factor_resolution)
-	
+
 	follow_count_resolution := 1
 	min_followers, max_followers, follower_dist := user_info.getFollowersDistribution(follow_count_resolution)
-	
+
+	co_ratio_resolution := float32(1.0)
+	min_co_ratio, max_co_ratio, co_ratio_dist := spread_model_data.user_interact_map.getCoActionRatioDistribution(co_ratio_resolution)
+
 	fmt.Printf("------------------- Data Statistics --------------------------\n")
 	fmt.Printf("Number of unique users: %d\n", num_unique_users)
 	fmt.Printf("User Engagement Factor Statistics:\n")
 	fmt.Printf("\tmin: %f, max: %f\n", min_factor, max_factor)
 	fmt.Printf("\tDistribution (resolution: %f): \n", engage_factor_resolution)
-	scale := min_factor 
+	scale := min_factor
 	for _, v := range *factor_dist {
 		if v > 0 {
-			fmt.Printf("\t\t[%f, %f) = %d\n", scale - engage_factor_resolution, scale, v)
+			fmt.Printf("\t\t[%f, %f) = %d\n", scale-engage_factor_resolution, scale, v)
 		}
 		scale += engage_factor_resolution
 	}
-	
+
 	fmt.Printf("User Followers Statistics:\n")
 	fmt.Printf("\tdirected interaction pairs: %d\n", user_info.size())
 	fmt.Printf("\tmin: %d, max: %d\n", min_followers, max_followers)
@@ -265,11 +319,22 @@ func (spread_model_data *SpreadModelData) PrintDataStatistics () {
 	follow_scale := min_followers
 	for _, v := range *follower_dist {
 		if v > 0 {
-			fmt.Printf("\t\t[%d, %d) = %d\n", follow_scale - follow_count_resolution, follow_scale, v)
+			fmt.Printf("\t\t[%d, %d) = %d\n", follow_scale-follow_count_resolution, follow_scale, v)
 		}
 		follow_scale += follow_count_resolution
 	}
 	
+	fmt.Printf("User CoAction Ratio Statistics:\n")
+	fmt.Printf("min: %f, max: %f\n", min_co_ratio, max_co_ratio)
+	fmt.Printf("\tDistribution (resolution: %f):\n", co_ratio_resolution)
+	ratio_scale := min_co_ratio
+	for _, v:= range *co_ratio_dist {
+		if v > 0 {
+			fmt.Printf("\t\t[%f, %f) = %d\n", ratio_scale-co_ratio_resolution, ratio_scale, v)
+		}
+		ratio_scale += co_ratio_resolution
+	}
+
 	fmt.Printf("---------------------------------------------------------------\n")
 }
 
@@ -295,7 +360,7 @@ func (simulation_result *SimulationResult) GetAverageRetweetCount() float32 {
 	for _, v := range simulation_result.num_retweets {
 		sum += v
 	}
-	return float32(sum)/float32(len(simulation_result.num_retweets))
+	return float32(sum) / float32(len(simulation_result.num_retweets))
 }
 
 //Takes an interval and returns the corresponding frequency, e.g.
@@ -313,7 +378,7 @@ func (simulation_result *SimulationResult) GetRetweetCountDistribution(intervals
 					break
 				}
 			}
-			
+
 		}
 		freq[ind]++
 	}
@@ -325,7 +390,7 @@ type Simulator struct {
 	parameter  *SimulationParameters
 }
 
-func (simulator *Simulator) GetParameters () *SimulationParameters {
+func (simulator *Simulator) GetParameters() *SimulationParameters {
 	if simulator.parameter == nil {
 		simulator.parameter = new(SimulationParameters)
 	}
@@ -462,9 +527,24 @@ func (simulator *Simulator) runReweet(post_id, follower_id uint64, depth int, us
 		return
 	}
 
+
 	user_info_map := simulator.model_data.user_info_map
 	interactions := simulator.model_data.user_interact_map
-	retweet_rate := simulator.parameter.Avg_retweet_rate * user_info_map.engagement_factor(follower_id) * interactions.getRetweetProb(post_id, follower_id)
+	
+	if user_info_map == nil {
+		panic("user_info_map is nil")
+	}
+	if interactions == nil {
+		panic("interactions is nil")
+	}
+	if simulator.parameter == nil {
+		panic("parameter is nil")
+	}
+	
+	g_avg_retweet_rate := simulator.parameter.Avg_retweet_rate
+	u_engagement_factor := user_info_map.engagement_factor(follower_id)
+	u_retweet_prob := interactions.getRetweetProb(post_id, follower_id)
+	retweet_rate :=  g_avg_retweet_rate * u_engagement_factor * u_retweet_prob
 
 	if rand.Float32() < retweet_rate {
 		(*users_retweeted)[follower_id] = true

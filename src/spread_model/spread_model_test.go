@@ -159,6 +159,9 @@ func TestUserInteractionMap(t *testing.T) {
 				v.original_id, v.reposter_id, v.retweet_prob, retweet_prob)
 		}
 	}
+	
+	min_co_action_ratio, max_co_action_ratio, dist := interaction_map.getCoActionRatioDistribution(0.2)
+	fmt.Printf("%v\t%v\t%v", min_co_action_ratio, max_co_action_ratio, *dist)
 }
 
 func TestLoadSpreadModelData(t *testing.T) {

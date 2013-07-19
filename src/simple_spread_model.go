@@ -39,7 +39,7 @@ func main() {
 
 	//parameters.Is_random_sim = true
 	//parameters.Random_sim_rounds = 100
-	run_simulation := false
+	run_simulation := true
 	
 	if run_simulation {
 		parameters.Is_random_sim = false
